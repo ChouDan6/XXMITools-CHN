@@ -77,30 +77,32 @@
             hash = {{ component.ib }}
             match_first_index = {{ part.first_index }}
             ib = Resource{{ part.fullname }}IB
-            {% set temp_list = part.textures|map(attribute="name")|lower %}
-            {% set normalmap_found = temp_list|selectattr("name", "equalto", "normalmap")|list %}
-            {% if normalmap_found|length > 0 %}
-                {% for texture in part.textures if texture.name == "NormalMap" %}
-                    ps-t0 = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor %}
-                {% for texture in part.textures if texture.name != "NormalMap" %}
-                    ps-t{{ loop.index  }} = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor %}
-                run = CommandList\global\ORFix\ORFix
-            {% else %}
-                {% for texture in part.textures %}
-                    ps-t{{ loop.index0 }} = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor %}
-            {% endif %}
-            {% for entry in part.objects if entry.vertex_count > 0 %}
-                {% if loop.previtem and loop.previtem.collection_name != entry.collection_name %}
-                    ; {{ entry.collection_name }}
-                {% endif %}
-                ; {{ entry.name }} ({{ entry.vertex_count }})
-                drawindexed = {{ entry.index_count}}, {{ entry.index_offset }}, 0
+            {% set normal_maps = part.textures | selectattr("name", "equalto", "NormalMap") | list -%}
+            {% if normal_maps | length > 0 -%}
+                {% for texture in part.textures if texture.name == "NormalMap" -%}
+            ps-t0 = Resource{{ part.fullname }}{{ texture.name }}
+                {% endfor -%}
+                {% for texture in part.textures if texture.name != "NormalMap" -%}
+            ps-t{{ loop.index }} = Resource{{ part.fullname }}{{ texture.name }}
+                {% endfor -%}
+            run = CommandList\global\ORFix\ORFix
+            {% else -%}
+                {% for texture in part.textures -%}
+            ps-t{{ loop.index0 }} = Resource{{ part.fullname }}{{ texture.name }}
+                {% endfor -%}
+            run = CommandList\global\ORFix\NNFix
+            {% endif -%}
+
+            {% for entry in part.objects if entry.vertex_count > 0 -%}
+                {% if loop.previtem and loop.previtem.collection_name != entry.collection_name -%}
+            ; {{ entry.collection_name }}
+                {% endif -%}
+            ; {{ entry.name }} ({{ entry.vertex_count }})
+            drawindexed = {{ entry.index_count}}, {{ entry.index_offset }}, 0
             {% endfor %}
         {% endfor %}
     {% endfor %}
+    
     {% for component in mod_file.components if component.draw_vb == "" %}
         {% for part in component.parts %}
             {% for texture in part.textures %}
