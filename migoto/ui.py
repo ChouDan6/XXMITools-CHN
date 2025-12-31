@@ -239,7 +239,7 @@ class XXMISidebarOptionsPanelBase(object):
 class XXMI_PT_SidePanelExportSettings(XXMISidebarOptionsPanelBase, Panel):
     bl_label = "Export Settings"
     bl_options = {"DEFAULT_CLOSED"}
-    bl_order = 0
+    bl_order = 10
 
     def draw(self, context):
         XXMISidebarOptionsPanelBase.draw(self, context)
