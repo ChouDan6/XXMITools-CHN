@@ -11,10 +11,7 @@ def remove_unused_vertex_groups(obj):
     移除给定obj的未使用的顶点组 (基于用户提供的算法)
     '''
     if obj.type == "MESH":
-        # 确保数据是最新的
         obj.update_from_editmode()
-        
-        # 统计使用情况
         vgroup_used = {i: False for i, k in enumerate(obj.vertex_groups)}
 
         for v in obj.data.vertices:
@@ -22,18 +19,14 @@ def remove_unused_vertex_groups(obj):
                 if g.weight > 0.0:
                     vgroup_used[g.group] = True
 
-        # 倒序删除 (防止索引偏移)
         for i, used in sorted(vgroup_used.items(), reverse=True):
             if not used:
                 obj.vertex_groups.remove(obj.vertex_groups[i])
 
 def perform_cleanup_job(context):
     """
-    执行清理任务：针对所有被选中的 Mesh 物体
-    1. 清理孤立点 (Delete Loose)
-    2. 移除未使用顶点组
+    执行清理任务
     """
-    # 获取导入后选中的物体 (通常导入器会选中所有新导入的物体)
     target_objs = [obj for obj in context.selected_objects if obj.type == 'MESH']
     
     if not target_objs:
@@ -41,19 +34,16 @@ def perform_cleanup_job(context):
 
     print(f"[XXMI] 开始清理 {len(target_objs)} 个导入物体...")
 
-    # 记录并确保在 Object 模式
     if context.mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
 
     for obj in target_objs:
         try:
-            # 必须设为 Active 才能执行 Edit Mode 操作
             context.view_layer.objects.active = obj
             
             # --- A. 清理孤立几何体 ---
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
-            # 清理孤立点/边
             bpy.ops.mesh.delete_loose()
             bpy.ops.object.mode_set(mode='OBJECT')
             
@@ -69,21 +59,16 @@ def perform_cleanup_job(context):
 # 1. 核心逻辑：路径强制清洗与更新
 # =============================================================================
 def force_update_dump_path(scene_name, new_path):
-    """
-    延迟执行的核弹级更新函数
-    """
     try:
         scene = bpy.data.scenes.get(scene_name)
         if not scene or not hasattr(scene, "xxmi"): 
             return
 
-        # 步骤 A: 暴力清空 -> 强制刷新
         scene.xxmi.dump_path = ""
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:
                 area.tag_redraw()
         
-        # 步骤 B: 写入新值 -> 强制刷新
         final_path = os.path.normpath(new_path)
         scene.xxmi.dump_path = final_path
         print(f"[XXMI] Dump Folder 已自动更新为: {final_path}")
@@ -104,7 +89,16 @@ def execute_hook(self, context):
     """
     植入到原版插件的逻辑
     """
-    # 1. 先执行原版导入
+    
+    # --- 阶段 0: 参数拦截 (Pre-Execution) ---
+    # 如果开启了镜像翻转，强制覆盖原插件的参数
+    # self 就是 import operator 的实例，直接修改它的属性即可生效
+    if getattr(context.scene, "xxmi_flip_mesh_enabled", False):
+        # 只要这里设为 True，原插件就会去执行 X 轴翻转 + 面朝向修正
+        self.flip_mesh = True
+        print("[XXMI] 已应用 Flip Mesh (X轴镜像+翻转面)")
+
+    # --- 阶段 1: 执行原版导入 ---
     if OriginalExecute:
         try:
             result = OriginalExecute(self, context)
@@ -114,13 +108,13 @@ def execute_hook(self, context):
     else:
         return {'CANCELLED'}
 
-    # 2. 后处理逻辑 (仅当导入成功时)
+    # --- 阶段 2: 后处理逻辑 (Post-Execution) ---
     if 'FINISHED' in result:
-        # --- 功能 A: 模型清理 (同步执行) ---
+        # 功能 A: 模型清理 (同步执行)
         if getattr(context.scene, "xxmi_cleanup_enabled", False):
             perform_cleanup_job(context)
 
-        # --- 功能 B: 路径填充 (异步执行) ---
+        # 功能 B: 路径填充 (异步执行)
         if getattr(context.scene, "xxmi_auto_fill_enabled", True):
             try:
                 filepath = getattr(self, "filepath", "")
@@ -144,7 +138,7 @@ class XXMI_PT_ImportPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_parent_id = "XXMI_PT_Sidebar"
-    bl_order = 0  # 保持 0，配合另一个面板的 10
+    bl_order = 0 
 
     def draw(self, context):
         layout = self.layout
@@ -156,6 +150,7 @@ class XXMI_PT_ImportPanel(bpy.types.Panel):
             col = layout.column(align=True)
             col.prop(context.scene, "xxmi_auto_fill_enabled", text="启用路径自动填充")
             col.prop(context.scene, "xxmi_cleanup_enabled", text="清理模型 (孤立点+无效权重)")
+            col.prop(context.scene, "xxmi_flip_mesh_enabled", text="X轴镜像并翻转面 (Flip Mesh)")
             
             layout.separator()
             
@@ -183,13 +178,17 @@ def register():
     bpy.types.Scene.xxmi_cleanup_enabled = bpy.props.BoolProperty(
         name="Cleanup Imported Mesh",
         description="导入后自动清理孤立点并移除未使用的顶点组",
-        default=False # 默认关闭，由用户决定是否开启
+        default=False 
+    )
+
+    bpy.types.Scene.xxmi_flip_mesh_enabled = bpy.props.BoolProperty(
+        name="Flip Mesh on Import",
+        description="导入时强制应用 Flip Mesh (X轴镜像并翻转缠绕顺序)",
+        default=False 
     )
     
-    # 2. 寻找目标类 (全域搜索模式)
+    # 2. 寻找目标类
     TargetClass = None
-    
-    # 策略 A: 尝试相对导入
     try:
         from . import import_ops
         if hasattr(import_ops, "Import3DMigotoFrameAnalysis"):
@@ -197,7 +196,6 @@ def register():
     except ImportError:
         pass
 
-    # 策略 B: 全局搜索
     if TargetClass is None:
         for name, module in sys.modules.items():
             if 'migoto' in name and 'import_ops' in name:
@@ -220,9 +218,7 @@ def register():
         print("[XXMI Error] 严重错误：未找到导入类，辅助功能不可用")
 
 def unregister():
-    # 1. 注销属性
     del bpy.types.Scene.xxmi_auto_fill_enabled
     del bpy.types.Scene.xxmi_cleanup_enabled
-    
-    # 2. 尝试还原 Hook (可选，通常不用管)
+    del bpy.types.Scene.xxmi_flip_mesh_enabled
     pass
