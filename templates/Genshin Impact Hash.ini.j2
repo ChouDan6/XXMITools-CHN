@@ -1,0 +1,179 @@
+{% extends "base.ini.j2" %}
+
+{# ================= CONSTANTS & CREDIT ================= #}
+{% block constantscredit %}
+    [Constants]
+	{% if credit != "" %}
+        global $active = 0
+        global $creditinfo = 0
+
+        [Present]
+        post $active = 0
+        run = CommandListCreditInfo
+    {% endif %}
+{% endblock %}
+
+{% block commandlistscredit %}
+    {% if credit != "" %}
+        [CommandListCreditInfo]
+            if $creditinfo == 0 && $active > 0
+            pre Resource\ShaderFixes\help.ini\Notification = ResourceCreditInfo
+            pre run = CustomShader\ShaderFixes\help.ini\FormatText
+            pre $\ShaderFixes\help.ini\notification_timeout = time + 5.0
+            $creditinfo = 2
+        endif
+    {% endif %}
+{% endblock %}
+
+{% block resourcecredit %}
+    {% if credit != "" %}
+        [ResourceCreditInfo]
+        type = Buffer
+        data = "Created by {{ credit }}"
+    {% endif %}
+{% endblock %}
+
+{# ================= OVERRIDES: BUFFERS ================= #}
+{% block overridesbuffers %}
+    {% for component in mod_file.components if component.draw_vb != "" and component.blend_vb != "" and component.vertex_count > 0 %}
+        [TextureOverride{{ component.fullname }}Position]
+        hash = {{ component.position_vb }}
+        this = Resource{{ component.fullname }}Position
+        {% if credit != "" %}
+            $active = 1
+        {% endif %}
+
+        [TextureOverride{{ component.fullname }}Blend]
+        hash = {{ component.blend_vb }}
+        handling = skip
+        this = Resource{{ component.fullname }}Blend
+        draw = {{ component.vertex_count }}, 0
+
+        [TextureOverride{{ component.fullname }}Texcoord]
+        hash = {{ component.texcoord_vb }}
+        this = Resource{{ component.fullname }}Texcoord
+
+        [TextureOverride{{ component.fullname }}VertexLimitRaise]
+        hash = {{ component.draw_vb }}
+        override_vertex_count = {{ component.vertex_count }}
+        override_byte_stride = {{ component.strides.position }}
+    {% endfor %}
+
+    {% for component in mod_file.components if component.draw_vb != "" and component.blend_vb == "" %}
+        [TextureOverride{{ component.fullname }}]
+        hash = {{ component.position_vb }}
+        this = Resource{{ component.fullname }}
+        {% if credit != "" %}
+            $active = 1
+        {% endif %}
+    {% endfor %}
+{% endblock %}
+
+{# ================= OVERRIDES: IB & TEXTURES (修复重点) ================= #}
+{% block overridesibs %}
+    {# DrawCalls (IB) #}
+    {% for component in mod_file.components if component.draw_vb != "" %}
+        [TextureOverride{{component.fullname}}IB]
+        hash = {{ component.ib }}
+        handling = skip
+
+        {% for part in component.parts if part.vertex_count > 0 %}
+            [TextureOverride{{ part.fullname }}]
+            hash = {{ component.ib }}
+            match_first_index = {{ part.first_index }}
+            ib = Resource{{ part.fullname }}IB
+            {% for entry in part.objects if entry.vertex_count > 0 -%}
+                {% if loop.previtem and loop.previtem.collection_name != entry.collection_name -%}
+            ; {{ entry.collection_name }}
+                {% endif -%}
+            ; {{ entry.name }} ({{ entry.vertex_count }})
+            drawindexed = {{ entry.index_count}}, {{ entry.index_offset }}, 0
+            {% endfor %}
+        {% endfor %}
+    {% endfor %}
+    
+    {# Independent Texture Overrides #}
+    {% for component in mod_file.components %}
+        {% for part in component.parts %}
+            {% for texture in part.textures %}
+                [TextureOverride{{part.fullname}}{{ texture.name }}]
+                hash = {{ texture.hash }}
+                this = Resource{{part.fullname}}{{ texture.name }}
+            {% endfor %}
+        {% endfor %}
+    {% endfor %}
+{% endblock %}
+
+{# ================= RESOURCES ================= #}
+{% block resourcebuffers %}
+    {% for component in mod_file.components if component.draw_vb != "" and component.blend_vb != ""  and component.vertex_count > 0 %}
+        {% if component.strides %}
+            [Resource{{ component.fullname }}Position]
+            type = Buffer
+            stride = {{ component.strides.position }}
+            filename = {{ component.fullname }}Position.buf
+
+            [Resource{{ component.fullname }}Blend]
+            type = Buffer
+            stride = {{ component.strides.blend }}
+            filename = {{ component.fullname }}Blend.buf
+
+            [Resource{{ component.fullname }}Texcoord]
+            type = Buffer
+            stride = {{ component.strides.texcoord }}
+            filename = {{ component.fullname }}Texcoord.buf
+        {% endif %}
+        
+        {% for part in component.parts %}
+            [Resource{{ part.fullname }}IB]
+            type = Buffer
+            format = DXGI_FORMAT_R32_UINT
+            filename = {{ part.fullname }}.ib
+        {% endfor %}
+    {% endfor %}
+    {% for component in mod_file.components if component.draw_vb != "" and component.blend_vb == "" and component.vertex_count > 0 %}
+        {% if component.strides %}
+            [Resource{{ component.fullname }}]
+            type = Buffer
+            stride = {{ component.strides.position }}
+            filename = {{ component.fullname }}.buf
+        {% endif %}
+        
+        {% for part in component.parts %}
+            [Resource{{ part.fullname }}IB]
+            type = Buffer
+            format = DXGI_FORMAT_R32_UINT
+            filename = {{ part.fullname }}.ib
+        {% endfor %}
+    {% endfor %}
+{% endblock %}
+
+{% block resourcetextures %}
+    {% for component in mod_file.components %}
+        {% for part in component.parts %}
+            {% for texture in part.textures %}
+                [Resource{{ part.fullname }}{{ texture.name }}]
+                filename = {{ part.fullname }}{{ texture.name }}{{ texture.extension }}
+            {% endfor %}
+        {% endfor %}
+    {% endfor %}
+{% endblock %}
+
+{% block constants %}
+    {{- self.constantscredit() -}}
+{% endblock %}
+
+{% block overrides %}
+    {{- self.overridesbuffers() -}}
+    {{- self.overridesibs() -}}
+{% endblock %}
+
+{% block commandlists %}
+    {{- self.commandlistscredit() -}}
+{% endblock %}
+
+{% block resources %}
+    {{- self.resourcebuffers() -}}
+    {{- self.resourcetextures() -}}
+    {{- self.resourcecredit() -}}
+{% endblock %}
