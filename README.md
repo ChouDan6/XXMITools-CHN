@@ -19,6 +19,19 @@ ini文件自动生成[Constants]节
 顶点色快速预设  
 UV重命名  
 锁定顶点权重  
-<img width="375" height="1191" alt="image" src="https://github.com/user-attachments/assets/56b738e9-e80e-431e-95c6-22606acd905d" />
+<img width="480" height="1156" alt="image" src="https://github.com/user-attachments/assets/6fe4b93c-a7c2-4fca-a0ad-18fc86e5a3f1" />  
+<img width="575" height="183" alt="image" src="https://github.com/user-attachments/assets/80c52710-4de9-400c-b09e-2c3029fbe0ef" />  
+<img width="476" height="238" alt="image" src="https://github.com/user-attachments/assets/16272d87-650b-4cbe-9dfc-3adae4578f05" />  
+<img width="474" height="364" alt="image" src="https://github.com/user-attachments/assets/699d4cd8-999d-4366-87b0-381778d4dff6" />  
+<img width="478" height="621" alt="image" src="https://github.com/user-attachments/assets/d23a0ecd-d836-443c-8559-fe11ec274fa9" />  
+<img width="472" height="621" alt="image" src="https://github.com/user-attachments/assets/8ece9b36-4a25-479d-9dac-ad6a5cd20c42" />  
+<img width="461" height="131" alt="image" src="https://github.com/user-attachments/assets/fb9f1b61-916e-4b27-8e78-0f87dac2bf99" />
+
+
+
+
+
+
+
 
 
