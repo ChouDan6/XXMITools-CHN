@@ -132,8 +132,18 @@ class XXMI_OT_WeightMatch(Operator):
         target_obj = props.match_source
         
         if base_obj and target_obj:
+            # 1. 执行匹配
             match_vertex_groups(base_obj, target_obj)
-            self.report({'INFO'}, "Vertex groups matched.")
+            
+            # 2. 【新增功能】自动按名称排序
+            # 必须将目标物体设为激活物体才能执行 vertex_group_move 操作
+            context.view_layer.objects.active = base_obj
+            # 确保物体被选中（虽然通常是指针属性，但以防万一）
+            base_obj.select_set(True)
+            
+            sort_vertex_groups(base_obj)
+            
+            self.report({'INFO'}, "Vertex groups matched and sorted.")
         else:
             self.report({'ERROR'}, "One or more objects not found.")
         return {'FINISHED'}
