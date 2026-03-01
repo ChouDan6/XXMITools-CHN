@@ -1,8 +1,8 @@
 {% extends "base.ini.j2" %}
 
 {% block constantscredit %}
-    [Constants]
-	{% if credit != "" %}
+    {% if credit != "" %}
+        [Constants]
         global $active = 0
         global $creditinfo = 0
 
@@ -77,40 +77,29 @@
             hash = {{ component.ib }}
             match_first_index = {{ part.first_index }}
             ib = Resource{{ part.fullname }}IB
-            {# 下面这一行结尾的 -% 会消除它自己占据的空行，但开头的 {% 不会吃掉上一行的 ib #}
-            {% set normal_maps = part.textures | selectattr("name", "equalto", "NormalMap") | list -%}
-            
-            {% if normal_maps | length > 0 -%}
-                {% for texture in part.textures if texture.name == "NormalMap" -%}
-            ps-t0 = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor -%}
-                {% for texture in part.textures if texture.name == "Diffuse" -%}
-            ps-t1 = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor -%}
-                {% for texture in part.textures if texture.name == "LightMap" -%}
-            ps-t2 = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor -%}
-            run = CommandList\global\ORFix\ORFix
-            {% else -%}
-                {% for texture in part.textures if texture.name == "Diffuse" -%}
-            ps-t0 = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor -%}
-                {% for texture in part.textures if texture.name == "LightMap" -%}
-            ps-t1 = Resource{{ part.fullname }}{{ texture.name }}
-                {% endfor -%}
-            run = CommandList\global\ORFix\NNFix
-            {% endif -%}
-
-            {% for entry in part.objects if entry.vertex_count > 0 -%}
-                {% if loop.previtem and loop.previtem.collection_name != entry.collection_name -%}
-            ; {{ entry.collection_name }}
-                {% endif -%}
-            ; {{ entry.name }} ({{ entry.vertex_count }})
-            drawindexed = {{ entry.index_count}}, {{ entry.index_offset }}, 0
+            {% for texture in part.textures %}
+              {% if "normalmap" in texture.name|lower %}
+                  Resource\GIMI\NormalMap = ref Resource{{ part.fullname }}{{ texture.name }}
+              {% elif "diffuse" in texture.name|lower %}
+                  Resource\GIMI\Diffuse = ref Resource{{ part.fullname }}{{ texture.name }}
+              {% elif "lightmap" in texture.name|lower %}
+                  Resource\GIMI\LightMap = ref Resource{{ part.fullname }}{{ texture.name }}
+              {% else %}
+              ; ps-t{{loop.index0}} = Resource{{ part.fullname }}{{ texture.name }}
+              {% endif %}
+            {% endfor %}
+            {% if part.textures|length > 0 %}
+              run = CommandList\GIMI\SetTextures
+            {% endif %}
+            {% for entry in part.objects if entry.vertex_count > 0 %}
+                {% if loop.previtem and loop.previtem.collection_name != entry.collection_name %}
+                    ; {{ entry.collection_name }}
+                {% endif %}
+                ; {{ entry.name }} ({{ entry.vertex_count }})
+                drawindexed = {{ entry.index_count}}, {{ entry.index_offset }}, 0
             {% endfor %}
         {% endfor %}
     {% endfor %}
-    
     {% for component in mod_file.components if component.draw_vb == "" %}
         {% for part in component.parts %}
             {% for texture in part.textures %}

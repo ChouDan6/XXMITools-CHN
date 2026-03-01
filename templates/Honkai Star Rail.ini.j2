@@ -1,8 +1,8 @@
 {% extends "base.ini.j2" %}
 
 {% block constantscredit %}
-    [Constants]
-	{% if credit != "" %}
+    {% if credit != "" %}
+        [Constants]
         global $active = 0
         global $creditinfo = 0
 
