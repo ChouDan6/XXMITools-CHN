@@ -5,7 +5,7 @@ from bpy.types import Operator, PropertyGroup, Panel
 from bpy.props import EnumProperty, FloatProperty, BoolProperty, PointerProperty
 
 # =============================================================================
-# 1. 核心算法 (保持原版逻辑不变)
+# 1. 核心算法
 # =============================================================================
 
 def _vgroup_items(self, context):
@@ -427,13 +427,13 @@ class XXMI_OT_RemoveEmptyVGroups(Operator):
 # =============================================================================
 
 class XXMI_PT_BoneMakerPanel(Panel):
-    bl_label = "骨骼生成器 (BoneMaker)"
+    bl_label = "骨骼生成器"
     bl_idname = "XXMI_PT_BoneMakerPanel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_parent_id = "XXMI_PT_Sidebar" 
     bl_options = {'DEFAULT_CLOSED'}
-    bl_order = 4 # 排在 AI 工具之后
+    bl_order = 8 
 
     def draw(self, context):
         # 安全检查

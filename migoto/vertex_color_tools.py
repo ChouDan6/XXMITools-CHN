@@ -4,7 +4,6 @@ import bpy
 # 1. 属性定义
 # =============================================================================
 class XXMI_VertexColorProperties(bpy.types.PropertyGroup):
-    # 为了界面统一，这里也顺便汉化了 RGBA 的标签
     a: bpy.props.FloatProperty(name="红 (R)", default=1.0, min=0.0, max=1.0, precision=3)
     b: bpy.props.FloatProperty(name="绿 (G)", default=0.216, min=0.0, max=1.0, precision=3)
     c: bpy.props.FloatProperty(name="蓝 (B)", default=0.216, min=0.0, max=1.0, precision=3)
@@ -173,16 +172,14 @@ class XXMI_OT_SeparateByMaterial(bpy.types.Operator):
 # 4. UI 面板
 # =============================================================================
 class XXMI_PT_ExtraToolsPanel(bpy.types.Panel):
-    bl_label = "顶点色预设"  # 汉化标题
+    bl_label = "顶点色预设"
     bl_idname = "XXMI_PT_ExtraToolsPanel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_parent_id = "XXMI_PT_Sidebar" 
     
-    # 【关键修改】排序
-    # Export Mod 按钮所在面板的 order 是 98
-    # 我们设为 99，它就会出现在 Export Mod 按钮下方
-    bl_order = 100 
+
+    bl_order = 9 
 
     def draw(self, context):
         layout = self.layout

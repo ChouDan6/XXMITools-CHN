@@ -4,7 +4,7 @@ from bpy.types import Operator, PropertyGroup, Panel
 from bpy.props import BoolProperty, CollectionProperty
 
 # =============================================================================
-# 1. 核心算法 (SKKeeper 逻辑移植)
+# 1. 核心算法
 # =============================================================================
 
 def log(msg):
@@ -282,11 +282,9 @@ class XXMI_PT_ShapeKeyTools(Panel):
     bl_idname = "XXMI_PT_ShapeKeyTools"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    # 挂载到主菜单
     bl_parent_id = "XXMI_PT_Sidebar" 
     bl_options = {'DEFAULT_CLOSED'}
-    # 放在 Import (0) 和 Export Settings (10) 之间
-    bl_order = 1 
+    bl_order = 3 
 
     def draw(self, context):
         layout = self.layout

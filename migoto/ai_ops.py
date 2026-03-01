@@ -7,7 +7,7 @@ from bpy.types import Operator, PropertyGroup, Panel
 from bpy.props import StringProperty, FloatProperty, CollectionProperty, PointerProperty
 
 # =============================================================================
-# 1. 全局配置与 API 调用 (完全还原原版)
+# 1. 全局配置与 API 调用
 # =============================================================================
 
 API_URL = "https://api.deepseek.com/chat/completions"
@@ -101,7 +101,7 @@ class XXMI_ShapeKeyProxyItem(PropertyGroup):
         description="同步场景所有物体"
     )
 
-# 为了不修改 __init__.py 也能存 Key，我们把 Key 放在属性组里
+
 class XXMI_AI_Properties(PropertyGroup):
     api_key: StringProperty(
         name="API Key",
@@ -119,7 +119,6 @@ class XXMI_OT_TranslateShapeKeys(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        # 直接从场景属性获取 Key，不再去偏好设置找
         props = context.scene.xxmi_ai_props
         api_key = props.api_key
         
@@ -193,25 +192,24 @@ class XXMI_PT_AIShapeKeyTools(Panel):
     bl_idname = "XXMI_PT_AIShapeKeyTools"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_parent_id = "XXMI_PT_Sidebar" # 挂载到 XXMI Tools
+    bl_parent_id = "XXMI_PT_Sidebar"
     bl_options = {'DEFAULT_CLOSED'}
-    bl_order = 3
+    bl_order = 5
 
     def draw(self, context):
         layout = self.layout
         scene = context.scene
         
-        # 确保属性已加载
         if not hasattr(scene, "xxmi_ai_props"):
             layout.label(text="需重启插件", icon="ERROR")
             return
 
         props = scene.xxmi_ai_props
         
-        # 1. API Key 输入区 (直接画在面板上！)
+        # 1. API Key 输入区
         box = layout.box()
         box.label(text="API 配置:", icon='PREFERENCES')
-        box.prop(props, "api_key") # 直接在这里输入，不用去偏好设置了
+        box.prop(props, "api_key")
         
         # 2. 翻译功能
         layout.separator()

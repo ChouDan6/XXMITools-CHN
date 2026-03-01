@@ -8,7 +8,7 @@ import sys
 # =============================================================================
 def remove_unused_vertex_groups(obj):
     '''
-    移除给定obj的未使用的顶点组 (基于用户提供的算法)
+    移除给定obj的未使用的顶点组
     '''
     if obj.type == "MESH":
         obj.update_from_editmode()
@@ -86,10 +86,6 @@ def force_update_dump_path(scene_name, new_path):
 OriginalExecute = None
 
 def execute_hook(self, context):
-    """
-    植入到原版插件的逻辑
-    """
-    
     # --- 阶段 0: 参数拦截 (Pre-Execution) ---
     # 如果开启了镜像翻转，强制覆盖原插件的参数
     # self 就是 import operator 的实例，直接修改它的属性即可生效
@@ -138,7 +134,7 @@ class XXMI_PT_ImportPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_parent_id = "XXMI_PT_Sidebar"
-    bl_order = 0 
+    bl_order = 1
 
     def draw(self, context):
         layout = self.layout

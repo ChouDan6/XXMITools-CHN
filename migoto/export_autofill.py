@@ -77,7 +77,7 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
                 # 记录这一对，方便后续清理
                 processed_pairs.append((obj, temp_obj, original_name))
                 
-                # --- 3. 核心修复逻辑 (补全 & 排序) ---
+                # --- 3. 核心逻辑 (补全 & 排序) ---
                 
                 # 3.1 补全顶点组 (0 ~ Max)
                 max_id = -1
@@ -97,14 +97,18 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
                         if i not in existing_names:
                             temp_obj.vertex_groups.new(name=str(i))
                 
-                # 3.2 排序
-                # 必须选中当前物体才能执行 ops
-                bpy.ops.object.select_all(action='DESELECT')
-                temp_obj.select_set(True)
-                context.view_layer.objects.active = temp_obj
-                
-                # Blender 按名称排序能正确处理数字 (0, 1, 2, 10...)
-                bpy.ops.object.vertex_group_sort(sort_type='NAME')
+                # 3.2 排序 (安全检查：只有当顶点组数量大于1时才需要排序)
+                if len(temp_obj.vertex_groups) > 1:
+                    # 必须选中当前物体才能执行 ops
+                    bpy.ops.object.select_all(action='DESELECT')
+                    temp_obj.select_set(True)
+                    context.view_layer.objects.active = temp_obj
+                    
+                    try:
+                        # Blender 按名称排序能正确处理数字 (0, 1, 2, 10...)
+                        bpy.ops.object.vertex_group_sort(sort_type='NAME')
+                    except Exception as e:
+                        print(f"[XXMI] 警告: {temp_obj.name} 顶点组排序跳过 ({str(e)})")
 
             # --- 4. 准备导出环境 ---
             # 此时场景里，原始物体名字变成了 _HIDDEN，临时物体名字是正常的。
@@ -187,7 +191,7 @@ class XXMI_PT_AutoFillPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_parent_id = "XXMI_PT_Sidebar" 
-    bl_order = 99
+    bl_order = 2
 
     def draw(self, context):
         layout = self.layout
@@ -204,4 +208,4 @@ class XXMI_PT_AutoFillPanel(bpy.types.Panel):
         row.scale_y = 1.5
         row.operator("xxmi.export_with_autofill", text="导出可见模型", icon='ARMATURE_DATA')
         
-        layout.label(text="* 自动补全 0-Max 顶点组并排序", icon="INFO")
+        layout.label(text="* 自动补全 0-Max 顶点组并导出", icon="INFO")

@@ -5,11 +5,10 @@ from bpy.types import Object, Operator, PropertyGroup, Panel
 from mathutils import Vector
 
 # =============================================================================
-# 1. 核心算法 (严格还原 Comilarex 原始逻辑)
+# 1. 核心算法
 # =============================================================================
 
 def get_weighted_center(obj, vgroup):
-    # [修复] 严格还原原版逻辑，移除错误的索引检查
     total_weight_area = 0.0
     weighted_position_sum = Vector((0.0, 0.0, 0.0))
     vertex_influence_area = calculate_vertex_influence_area(obj)
@@ -87,31 +86,29 @@ def set_active_vertex_group(obj, group_name):
 class XXMI_WeightProperties(PropertyGroup):
     # 匹配功能
     match_source: PointerProperty(
-        name="基体", # 对应原版 weight_paint_matching_target (Source)
+        name="基体",
         description="Object to copy weight paint data from", 
         type=Object
     )
     match_target: PointerProperty(
-        name="目标", # 对应原版 weight_paint_matching_base (Dest)
+        name="目标",
         description="Object to receive weight paint data", 
         type=Object
     )
     
-    # 翻转功能
     flip_target_name: StringProperty(
         name="目标", 
         description="The vertex group that receives the flipped weight paint"
     )
-    # 隐藏的轴向设置，默认为 X，还原原版逻辑
     flip_axis: EnumProperty(
         name="Axis", 
         items=[('X', "X", ""), ('Y', "Y", ""), ('Z', "Z", "")], 
         default='X'
     )
     
-    # 交换功能
+
     swap_source: PointerProperty(
-        name="参考", # 对应原版 weight_swap_obj_a
+        name="参考",
         description="Object from which to copy weight paint data", 
         type=Object
     )
@@ -127,7 +124,6 @@ class XXMI_OT_WeightMatch(Operator):
 
     def execute(self, context):
         props = context.scene.xxmi_weight_props
-        # 传入 (Dest, Source)
         base_obj = props.match_target
         target_obj = props.match_source
         
@@ -156,13 +152,11 @@ class XXMI_OT_RenumberUnknown(Operator):
     def execute(self, context):
         obj = context.object
         if obj and obj.type == 'MESH':
-            # [修复] 严格还原原版 set 差集计算逻辑
             unknown_groups = [group for group in obj.vertex_groups if group.name.startswith("unknown")]
             existing_numbers = sorted([int(g.name) for g in obj.vertex_groups if g.name.isdigit()], key=int)
             missing_numbers = sorted(set(range(len(obj.vertex_groups))) - set(existing_numbers))
             
             for i, group in enumerate(unknown_groups):
-                # 原版公式
                 new_name = str(missing_numbers[i] if i < len(missing_numbers) else max(existing_numbers) + i - len(missing_numbers) + 1)
                 group.name = new_name
                 
@@ -176,7 +170,6 @@ class XXMI_OT_FlipWeights(Operator):
     bl_label = "翻转"
     bl_options = {'REGISTER', 'UNDO'}
     
-    # 原版 Operator 本身就有 axis 属性，虽然 UI 没显示，但逻辑里用了
     axis: EnumProperty(name="Axis", items=[('X', "X", ""), ('Y', "Y", ""), ('Z', "Z", "")], default='X')
 
     def execute(self, context):
@@ -212,17 +205,13 @@ class XXMI_OT_FlipWeights(Operator):
         props = context.scene.xxmi_weight_props
         target_group_name = props.flip_target_name
         
-        # 还原逻辑：如果没填名字，就在原脚本里会报错，但这里我们做一个容错或者保持原样
-        # 原脚本逻辑：target_group_name = context.scene.flip_weights_target_group
+
         # if target_group_index == -1: raise ValueError
         if not target_group_name:
-             # 原脚本会报错，但这里为了好用，如果没有填，默认翻转到当前激活组
              target_group_name = original_obj.vertex_groups.active.name
         
         target_group_index = original_obj.vertex_groups.find(target_group_name)
         if target_group_index == -1:
-             # 如果不存在，原脚本是报错，我们这里也报错或者新建，原脚本是 raise ValueError
-             # 为了完全忠实，我们稍微宽容一点，如果没有就新建，或者提示
              target_group = original_obj.vertex_groups.new(name=target_group_name)
              target_group_index = target_group.index
              
@@ -281,9 +270,7 @@ class XXMI_OT_SortGroups(Operator):
              self.report({'ERROR'}, "No mesh object selected.")
         return {'FINISHED'}
 
-# =============================================================================
-# 4. UI 面板 (严格 1:1 还原图2)
-# =============================================================================
+
 
 class XXMI_PT_WeightTools(Panel):
     bl_label = "权重匹配工具"
@@ -292,7 +279,7 @@ class XXMI_PT_WeightTools(Panel):
     bl_region_type = 'UI'
     bl_parent_id = "XXMI_PT_Sidebar" 
     bl_options = {'DEFAULT_CLOSED'}
-    bl_order = 2 
+    bl_order = 4 
 
     def draw(self, context):
         layout = self.layout
@@ -323,8 +310,7 @@ class XXMI_PT_WeightTools(Panel):
         row.prop(props, "swap_source")
         row.operator("xxmi.weight_swap")
         
-        # 原版没有显示排序按钮，这里为了忠实还原也隐藏它，
-        # 或者您可以手动调用 xxmi.sort_groups 操作符
+
 
 # =============================================================================
 # 5. 注册
