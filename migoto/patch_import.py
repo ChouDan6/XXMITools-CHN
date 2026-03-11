@@ -4,7 +4,7 @@ import functools
 import sys
 
 # =============================================================================
-# 0. 辅助功能：模型清理逻辑
+# 0. 辅助功能：模型清理逻辑 & 材质贴图逻辑
 # =============================================================================
 def remove_unused_vertex_groups(obj):
     '''
@@ -55,6 +55,116 @@ def perform_cleanup_job(context):
 
     print("[XXMI] 清理完成")
 
+
+def perform_material_texture_job(context, filepath):
+    """
+    执行材质与贴图处理逻辑:
+    1. 材质名使用网格名
+    2. 如果有对应贴图则连接 (按 Diffuse, LightMap 等后缀匹配)
+    3. 如果找不到图片也新建对应网格名的材质
+    """
+    target_objs = [obj for obj in context.selected_objects if obj.type == 'MESH']
+    if not target_objs:
+        return
+
+    dump_dir = os.path.dirname(filepath) if filepath else ""
+    if not dump_dir or not os.path.exists(dump_dir):
+        return
+
+    files = os.listdir(dump_dir)
+    # 参照原项目的贴图类型后缀优先级
+    texture_types = ["Diffuse", "LightMap", "NormalMap", "StockingMap", "MaterialMap", "Skill", "DiffuseUlt", "idle", "Back"]
+    valid_exts = ('.dds', '.png', '.jpg', '.jpeg', '.tga', '.bmp')
+
+    print(f"[XXMI] 开始为 {len(target_objs)} 个物体处理材质与纹理...")
+
+    for obj in target_objs:
+        mesh_name = obj.name
+        mat_name = mesh_name  # 强制材质名使用真实的网格名
+        
+        # 1. 新建或获取以网格名命名的材质
+        mat = bpy.data.materials.get(mat_name)
+        if not mat:
+            mat = bpy.data.materials.new(name=mat_name)
+        
+        mat.use_nodes = True
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+        
+        # 2. 文件名去后缀后，检查物体名是否以其开头
+        # 例如文件是 BodyDiffuse.dds，前缀是 Body，而物体名可能是 Body.001
+        target_img_name = None
+        for tex_type in texture_types:
+            for f in files:
+                fname, ext = os.path.splitext(f)
+                if ext.lower() not in valid_exts:
+                    continue
+                
+                # 如果文件名以贴图类型结尾 (如 Diffuse)
+                if fname.endswith(tex_type):
+                    base_mesh_name = fname[:-len(tex_type)]
+                    # 匹配规则：物体名以基础网格名开头即可
+                    if mesh_name.startswith(base_mesh_name):
+                        target_img_name = f
+                        break
+            if target_img_name:
+                break
+        
+        # 3. 加载图片并连接节点
+        if target_img_name:
+            img_path = os.path.join(dump_dir, target_img_name)
+            fname_no_ext = os.path.splitext(target_img_name)[0]
+            
+            # 尝试获取已加载的图片 (原项目可能会把名字去掉扩展名)
+            img = bpy.data.images.get(target_img_name) or bpy.data.images.get(fname_no_ext)
+            
+            # 如果没加载，则尝试加载
+            if not img:
+                try:
+                    from .texturehandling import TextureHandler
+                    TextureHandler.convert_dds(context, file=img_path)
+                    img = bpy.data.images.get(target_img_name) or bpy.data.images.get(fname_no_ext)
+                except ImportError:
+                    pass
+                except Exception as e:
+                    print(f"[XXMI] 原生 TextureHandler 失败，尝试常规加载: {e}")
+                    
+            if not img:
+                try:
+                    img = bpy.data.images.load(img_path)
+                except Exception as e:
+                    print(f"[XXMI Warning] 无法加载图片 {img_path}: {e}")
+                    img = None
+                    
+            if img:
+                nodes = mat.node_tree.nodes
+                links = mat.node_tree.links
+                nodes.clear()
+                
+                out_node = nodes.new('ShaderNodeOutputMaterial')
+                out_node.location = (300, 300)
+                
+                bsdf = nodes.new('ShaderNodeBsdfPrincipled')
+                bsdf.location = (0, 300)
+                links.new(bsdf.outputs[0], out_node.inputs[0])
+                
+                tex_node = nodes.new('ShaderNodeTexImage')
+                tex_node.location = (-300, 300)
+                tex_node.image = img
+                
+                # 防止透明度问题，Alpha设为NONE并使用sRGB
+                img.alpha_mode = "NONE"
+                if hasattr(img, 'colorspace_settings'):
+                    img.colorspace_settings.name = 'sRGB'
+                
+                links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
+                print(f"[XXMI] 材质 {mat_name} 已成功连接贴图: {target_img_name}")
+            else:
+                print(f"[XXMI] 找到图片文件 {target_img_name} 但加载失败，可能需要 dds 插件。")
+        else:
+            print(f"[XXMI] 材质 {mat_name} 未找到对应图片，已创建纯材质。")
+
+
 # =============================================================================
 # 1. 核心逻辑：路径强制清洗与更新
 # =============================================================================
@@ -87,10 +197,7 @@ OriginalExecute = None
 
 def execute_hook(self, context):
     # --- 阶段 0: 参数拦截 (Pre-Execution) ---
-    # 如果开启了镜像翻转，强制覆盖原插件的参数
-    # self 就是 import operator 的实例，直接修改它的属性即可生效
     if getattr(context.scene, "xxmi_flip_mesh_enabled", False):
-        # 只要这里设为 True，原插件就会去执行 X 轴翻转 + 面朝向修正
         self.flip_mesh = True
         print("[XXMI] 已应用 Flip Mesh (X轴镜像+翻转面)")
 
@@ -106,14 +213,19 @@ def execute_hook(self, context):
 
     # --- 阶段 2: 后处理逻辑 (Post-Execution) ---
     if 'FINISHED' in result:
+        filepath = getattr(self, "filepath", "")
+        
         # 功能 A: 模型清理 (同步执行)
         if getattr(context.scene, "xxmi_cleanup_enabled", False):
             perform_cleanup_job(context)
 
-        # 功能 B: 路径填充 (异步执行)
+        # 功能 B: 材质贴图生成与连接 (同步执行)
+        if getattr(context.scene, "xxmi_import_textures_enabled", False):
+            perform_material_texture_job(context, filepath)
+
+        # 功能 C: 路径填充 (异步执行)
         if getattr(context.scene, "xxmi_auto_fill_enabled", True):
             try:
-                filepath = getattr(self, "filepath", "")
                 if filepath:
                     dump_dir = os.path.dirname(filepath)
                     bpy.app.timers.register(
@@ -146,7 +258,8 @@ class XXMI_PT_ImportPanel(bpy.types.Panel):
             col = layout.column(align=True)
             col.prop(context.scene, "xxmi_auto_fill_enabled", text="启用路径自动填充")
             col.prop(context.scene, "xxmi_cleanup_enabled", text="清理模型 (孤立点+无效权重)")
-            col.prop(context.scene, "xxmi_flip_mesh_enabled", text="X轴镜像并翻转面 (Flip Mesh)")
+            col.prop(context.scene, "xxmi_flip_mesh_enabled", text="X轴镜像并翻转面")
+            col.prop(context.scene, "xxmi_import_textures_enabled", text="导入材质与贴图")
             
             layout.separator()
             
@@ -179,8 +292,14 @@ def register():
 
     bpy.types.Scene.xxmi_flip_mesh_enabled = bpy.props.BoolProperty(
         name="Flip Mesh on Import",
-        description="导入时强制应用 Flip Mesh (X轴镜像并翻转缠绕顺序)",
+        description="导入时强制应用 Flip Mesh (3DMigoto非镜像)",
         default=False 
+    )
+    
+    bpy.types.Scene.xxmi_import_textures_enabled = bpy.props.BoolProperty(
+        name="Import Materials and Textures",
+        description="导入后自动创建与网格同名的材质并连接贴图",
+        default=True 
     )
     
     # 2. 寻找目标类
@@ -217,4 +336,5 @@ def unregister():
     del bpy.types.Scene.xxmi_auto_fill_enabled
     del bpy.types.Scene.xxmi_cleanup_enabled
     del bpy.types.Scene.xxmi_flip_mesh_enabled
+    del bpy.types.Scene.xxmi_import_textures_enabled
     pass
