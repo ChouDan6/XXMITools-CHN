@@ -56,7 +56,7 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
                 # A. 记录原始名字
                 original_name = obj.name
                 
-                # B. 将原始物体改名“隐身”
+                # B. 将原始物体改名"隐身"
                 # 这一步至关重要：防止导出器通过名字找到原始物体
                 obj.name = original_name + "_XXMI_HIDDEN"
                 
@@ -65,7 +65,7 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
                 temp_obj = obj.copy()
                 temp_obj.data = temp_mesh
                 
-                # D. 让临时副本“顶包”：使用原始名字
+                # D. 让临时副本"顶包"：使用原始名字
                 temp_obj.name = original_name 
                 
                 # E. 链接到原始物体所在的集合
@@ -97,8 +97,11 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
                         if i not in existing_names:
                             temp_obj.vertex_groups.new(name=str(i))
                 
-                # 3.2 排序 (安全检查：只有当顶点组数量大于1时才需要排序)
-                if len(temp_obj.vertex_groups) > 1:
+                # 3.2 排序
+                # 修复：仅当存在数字顶点组（即确实执行了补全）时才排序
+                # 对于纯非数字顶点组（如 PMX 骨骼名）的模型，排序会改变
+                # 顶点组的内部 index，导致导出的 BLENDINDICES 与原版导出不一致
+                if max_id >= 0 and len(temp_obj.vertex_groups) > 1:
                     # 必须选中当前物体才能执行 ops
                     bpy.ops.object.select_all(action='DESELECT')
                     temp_obj.select_set(True)
@@ -157,7 +160,7 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
                 try:
                     orig_obj.name = original_name
                 except:
-                    print(f"警告: 还原原始物体名称失败 {original_name}")
+                    print(f"��告: 还原原始物体名称失败 {original_name}")
 
             # B. 恢复原始选择状态
             try:
