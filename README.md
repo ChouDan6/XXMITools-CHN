@@ -152,7 +152,7 @@
 
 - 原始插件：[DarkStarSword](https://github.com/DarkStarSword/3d-fixes)
 - XXMI Tools：[LeoTorreZ](https://github.com/leotorrez/XXMITools)
-- 贡献者：SilentNightSound, HazrateGolabi, HummyR, SinsOfSeven, SpectrumQT
+- 贡献者：SilentNightSound, HazrateGolabi, HummyR, SinsOfSeven, SpectrumQT, Sora, Comilarex等
 
 
 
