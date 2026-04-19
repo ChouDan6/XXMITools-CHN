@@ -1,5 +1,6 @@
 import bpy
 import traceback
+from pathlib import Path
 
 # =============================================================================
 # 1. 核心操作类：全场景自动替换导出
@@ -131,7 +132,32 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
             # 因为 xxmi_settings.only_selected = True，且只有临时物体被选中
             # 导出器会认为这些临时物体就是我们要导出的内容
             bpy.ops.xxmi.exportadvanced('INVOKE_DEFAULT')
-            
+
+            # --- 5.5 处理 DISABLED 前缀 ---
+            if hasattr(scene, "xxmi_autofill_props") and scene.xxmi_autofill_props.disabled_prefix:
+                try:
+                    dump_path = Path(xxmi_settings.dump_path)
+                    if dump_path.suffix != "":
+                        dump_path = dump_path.parent
+                    mod_name = dump_path.stem
+                    dest = Path(xxmi_settings.destination_path) if xxmi_settings.destination_path else dump_path.parent / f"{mod_name}Mod"
+                    ini_path = dest / (mod_name + ".ini")
+                    disabled_path = dest / ("DISABLED" + mod_name + ".ini")
+                    # 先删除旧的 DISABLED 文件，再重命名新文件
+                    if disabled_path.exists():
+                        disabled_path.unlink()
+                    if ini_path.exists():
+                        ini_path.rename(disabled_path)
+                        self.report({'INFO'}, f"已添加 DISABLED 前缀: {disabled_path.name}")
+                except Exception as e:
+                    self.report({'WARNING'}, f"添加 DISABLED 前缀失败: {str(e)}")
+
+            # --- 5.6 自动执行 INI 预览 ---
+            try:
+                bpy.ops.xxmi.preview_ini()
+            except Exception as e:
+                print(f"[XXMI] INI 预览跳过: {str(e)}")
+
             self.report({'INFO'}, "导出流程完成！")
             
         except Exception as e:
@@ -185,6 +211,126 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
 
 
 # =============================================================================
+# 1.5 INI 预览操作类
+# =============================================================================
+class XXMI_OT_PreviewINI(bpy.types.Operator):
+    bl_idname = "xxmi.preview_ini"
+    bl_label = "预览 INI 文件"
+    bl_description = "在文本编辑器中预览即将导出的 INI 内容"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        scene = context.scene
+        if not hasattr(scene, "xxmi"):
+            self.report({'ERROR'}, "未找到 XXMI 插件设置。")
+            return {'CANCELLED'}
+
+        xxmi = scene.xxmi
+
+        if xxmi.game == "":
+            self.report({'ERROR'}, "请先选择游戏类型。")
+            return {'CANCELLED'}
+
+        try:
+            from .exporter import ModExporter
+            from .datastructures import GameEnum
+
+            dump_path = Path(xxmi.dump_path)
+            if not dump_path.exists():
+                self.report({'ERROR'}, f"Dump 路径不存在: {dump_path}")
+                return {'CANCELLED'}
+
+            destination = Path(xxmi.destination_path) if xxmi.destination_path else dump_path.parent / f"{dump_path.stem}Mod"
+
+            if not xxmi.use_custom_template:
+                xxmi.template_path = ""
+
+            mod_exporter = ModExporter(
+                context=context,
+                operator=self,
+                dump_path=dump_path,
+                destination=destination,
+                game=GameEnum[xxmi.game],
+                ignore_hidden=xxmi.ignore_hidden,
+                only_selected=xxmi.only_selected,
+                no_ramps=xxmi.no_ramps,
+                copy_textures=xxmi.copy_textures,
+                ignore_duplicate_textures=xxmi.ignore_duplicate_textures,
+                credit=xxmi.credit,
+                outline_optimization=xxmi.outline_optimization,
+                apply_modifiers=xxmi.apply_modifiers_and_shapekeys,
+                normalize_weights=xxmi.normalize_weights,
+                write_buffers=xxmi.write_buffers,
+                write_ini=True,
+                template=Path(xxmi.template_path)
+                if xxmi.use_custom_template != ""
+                else None,
+            )
+            mod_exporter.generate_buffers()
+            mod_exporter.generate_ini()
+
+            # 从 files_to_write 中提取 ini 内容
+            ini_content = ""
+            for file_path, content in mod_exporter.files_to_write.items():
+                if isinstance(content, str) and str(file_path).endswith(".ini"):
+                    ini_content = content
+                    break
+
+            mod_exporter.cleanup()
+
+            if not ini_content:
+                self.report({'ERROR'}, "未能生成 INI 内容。")
+                return {'CANCELLED'}
+
+            # 写入 Blender 文本块
+            text_name = f"{mod_exporter.mod_name}_preview.ini"
+            if text_name in bpy.data.texts:
+                text_block = bpy.data.texts[text_name]
+                text_block.clear()
+            else:
+                text_block = bpy.data.texts.new(text_name)
+            text_block.write(ini_content)
+
+            # 打开新的文本编辑器区域显示预览
+            for area in context.screen.areas:
+                if area.type == 'TEXT_EDITOR':
+                    area.spaces[0].text = text_block
+                    self.report({'INFO'}, f"已更新 INI 预览: {text_name}")
+                    return {'FINISHED'}
+
+            # 没有现有文本编辑器，拆分当前 3D 视口
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    with context.temp_override(area=area):
+                        bpy.ops.screen.area_split(direction='VERTICAL', factor=0.5)
+                    # 新区域是列表中最后一个
+                    new_area = context.screen.areas[-1]
+                    new_area.type = 'TEXT_EDITOR'
+                    new_area.spaces[0].text = text_block
+                    break
+
+            self.report({'INFO'}, f"已生成 INI 预览: {text_name}")
+
+        except Exception as e:
+            self.report({'ERROR'}, f"预览失败: {str(e)}")
+            traceback.print_exc()
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
+
+# =============================================================================
+# 1.6 自动补充顶点组导出属性
+# =============================================================================
+class XXMI_AutoFillProperties(bpy.types.PropertyGroup):
+    disabled_prefix: bpy.props.BoolProperty(
+        name="添加 DISABLED 前缀",
+        description="导出的 INI 文件名添加 DISABLED 前缀，使 mod 默认不生效",
+        default=False,
+    )
+
+
+# =============================================================================
 # 2. 独立 UI 面板
 # =============================================================================
 class XXMI_PT_AutoFillPanel(bpy.types.Panel):
@@ -198,7 +344,7 @@ class XXMI_PT_AutoFillPanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        
+
         # 安全获取属性
         if hasattr(context.scene, "xxmi"):
             xxmi = context.scene.xxmi
@@ -206,9 +352,27 @@ class XXMI_PT_AutoFillPanel(bpy.types.Panel):
             if not xxmi.write_buffers and not xxmi.write_ini and not xxmi.copy_textures:
                 layout.label(text="请先配置导出设置", icon="INFO")
                 layout.enabled = False
-        
+
         row = layout.row()
         row.scale_y = 1.5
         row.operator("xxmi.export_with_autofill", text="导出可见模型", icon='ARMATURE_DATA')
-        
+
+        # INI 预览与选项
+        row = layout.row(align=True)
+        row.operator("xxmi.preview_ini", text="预览 INI", icon='TEXT')
+
+        if hasattr(context.scene, "xxmi_autofill_props"):
+            layout.prop(context.scene.xxmi_autofill_props, "disabled_prefix")
+
         layout.label(text="* 自动补全 0-Max 顶点组并导出", icon="INFO")
+
+
+# =============================================================================
+# 3. 注册
+# =============================================================================
+def register():
+    bpy.types.Scene.xxmi_autofill_props = bpy.props.PointerProperty(type=XXMI_AutoFillProperties)
+
+def unregister():
+    if hasattr(bpy.types.Scene, "xxmi_autofill_props"):
+        del bpy.types.Scene.xxmi_autofill_props

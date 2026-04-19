@@ -54,14 +54,19 @@ def _apply_vertex_color_to_selected(context, operator_instance):
                     operator_instance.report({'INFO'}, f"已应用顶点色 (并清理 COLOR1): {obj.name}")
                 else:
                     operator_instance.report({'INFO'}, f"已应用顶点色: {obj.name}")
+            obj.data.update()
+            obj.data.update_tag()
             applied_count +=1
         else:
             operator_instance.report({'WARNING'}, f"{obj.name} 不是网格物体，已跳过")
-            
+
     if applied_count == 0:
         operator_instance.report({'WARNING'}, "未找到有效的网格物体。")
         return {'CANCELLED'}
-    
+
+    # 强制刷新视口：触发 depsgraph 更新以刷新 GPU 顶点色缓存
+    context.view_layer.update()
+
     return {'FINISHED'}
 
 # =============================================================================
@@ -72,7 +77,8 @@ def _apply_vertex_color_to_selected(context, operator_instance):
 class XXMI_OT_SetDefaultColorYS(bpy.types.Operator):
     bl_idname = "xxmi.set_default_color_ys"
     bl_label = "设为原神默认"
-    
+    bl_options = {'REGISTER', 'UNDO'}
+
     def execute(self, context):
         props = context.scene.xxmi_vertex_color_props
         props.a = 1.0
@@ -86,7 +92,8 @@ class XXMI_OT_SetDefaultColorYS(bpy.types.Operator):
 class XXMI_OT_SetDefaultColorBT(bpy.types.Operator):
     bl_idname = "xxmi.set_default_color_bt"
     bl_label = "设为崩铁默认"
-    
+    bl_options = {'REGISTER', 'UNDO'}
+
     def execute(self, context):
         props = context.scene.xxmi_vertex_color_props
         props.a = 1.0
@@ -100,7 +107,8 @@ class XXMI_OT_SetDefaultColorBT(bpy.types.Operator):
 class XXMI_OT_SetDefaultColorZZZ(bpy.types.Operator):
     bl_idname = "xxmi.set_default_color_zzz"
     bl_label = "设为绝区零默认"
-    
+    bl_options = {'REGISTER', 'UNDO'}
+
     def execute(self, context):
         props = context.scene.xxmi_vertex_color_props
         props.a = 0.216
@@ -114,7 +122,8 @@ class XXMI_OT_SetDefaultColorZZZ(bpy.types.Operator):
 class XXMI_OT_SetDefaultColorMT(bpy.types.Operator):
     bl_idname = "xxmi.set_default_color_mt"
     bl_label = "设为鸣潮默认"
-    
+    bl_options = {'REGISTER', 'UNDO'}
+
     def execute(self, context):
         props = context.scene.xxmi_vertex_color_props
         props.a = 0.216
@@ -128,7 +137,8 @@ class XXMI_OT_SetDefaultColorMT(bpy.types.Operator):
 class XXMI_OT_AddColorAttribute(bpy.types.Operator):
     bl_idname = "xxmi.add_color_attribute"
     bl_label = "应用顶点色"
-    
+    bl_options = {'REGISTER', 'UNDO'}
+
     def execute(self, context):
         return _apply_vertex_color_to_selected(context, self)
 
