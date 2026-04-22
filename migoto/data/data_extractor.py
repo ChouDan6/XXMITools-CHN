@@ -6,7 +6,6 @@ import time
 from bpy.types import Mesh, Object
 
 from typing import Optional, Callable
-from operator import attrgetter
 
 from .byte_buffer import (
     AbstractSemantic,
@@ -202,14 +201,67 @@ class BlenderDataExtractor:
             if buffer_semantic.abstract.enum in self.blender_loop_semantics:
                 layout.add_element(buffer_semantic)
 
-        # TODO: Check if the export needs tangents or bitangents
-            # Error out if it does not have a valid UV in these cases
-            # ADD: UI for the user to select which UV map to use for tangent calculation
-        mesh.calc_tangents(uvmap="TEXCOORD.xy")
+        # Build triangle loop indices via vectorized fan triangulation.
+        #
+        # We use mesh.polygons.foreach_get("loop_total" / "loop_start") instead
+        # of mesh.calc_loop_triangles() + foreach_get("loops") because the latter
+        # is not guaranteed to write 3 values per triangle on all Blender versions /
+        # mesh types, which caused quads to produce only 1 triangle instead of 2
+        # (observed: draw count dropped from 5,896,860 to 3,932,751 on a 1M-vert
+        # quad sphere ¡ª a 3:2 ratio matching poly-loop-count vs tri-loop-count).
+        #
+        # Fan triangulation: for a polygon with loop_start L and loop_total N,
+        # produces N-2 triangles: (L, L+j+1, L+j+2) for j in 0..N-3.
+        # This is identical to BMesh for convex polygons (all game meshes).
+        n_polys: int = len(mesh.polygons)
+        poly_loop_totals = numpy.empty(n_polys, dtype=numpy.int32)
+        poly_loop_starts = numpy.empty(n_polys, dtype=numpy.int32)
+        mesh.polygons.foreach_get("loop_total", poly_loop_totals)
+        mesh.polygons.foreach_get("loop_start", poly_loop_starts)
 
-        # Initialize loop data storage
-        size = len(mesh.loops)
-        loop_data = NumpyBuffer(layout, size=size)
+        tri_counts = poly_loop_totals - 2          # triangles per polygon (N-2 for N-gon)
+        n_tris: int = int(tri_counts.sum())
+
+        # For each triangle, record which polygon it came from and its fan index j.
+        poly_rep = numpy.repeat(
+            numpy.arange(n_polys, dtype=numpy.int32), tri_counts
+        )
+        # tri_global_start[k] = index of the first triangle in poly_rep[k]'s polygon
+        cumsum_tris = numpy.empty(n_polys, dtype=numpy.int32)
+        numpy.cumsum(tri_counts[:-1], out=cumsum_tris[1:])
+        cumsum_tris[0] = 0
+        tri_global_start = numpy.repeat(cumsum_tris, tri_counts)
+        local_j = numpy.arange(n_tris, dtype=numpy.int32) - tri_global_start
+
+        starts = poly_loop_starts[poly_rep]
+        tri_loop_indices = numpy.empty(n_tris * 3, dtype=numpy.int32)
+        tri_loop_indices[0::3] = starts                 # fan apex (loop_start)
+        tri_loop_indices[1::3] = starts + local_j + 1  # second vertex
+        tri_loop_indices[2::3] = starts + local_j + 2  # third vertex
+
+        # Apply winding flip to the index array instead of the data array;
+        # semantically identical but avoids rewriting the whole data buffer.
+        if flip_winding:
+            tri_loop_indices = tri_loop_indices.reshape(-1, 3)
+            tri_loop_indices[:, [0, 2]] = tri_loop_indices[:, [2, 0]]
+            tri_loop_indices = tri_loop_indices.flatten()
+
+        # Only compute tangents when the export layout actually needs them.
+        # calc_tangents is an expensive Mikkt-space pass (~5-10 s for 1M-vert
+        # meshes) and is wasted work when only Position / Blend / TexCoord are
+        # being exported.
+        needs_tangents: bool = any(
+            s.abstract.enum in (Semantic.Tangent, Semantic.BitangentSign)
+            for s in proxy_layout.semantics
+        )
+        if needs_tangents:
+            mesh.calc_tangents(uvmap="TEXCOORD.xy")
+
+        # Fetch loop data in polygon order (len(mesh.loops) entries).
+        # We will reorder to triangle order afterwards with a single numpy
+        # fancy-index step, which is O(N) and entirely in C.
+        poly_size: int = len(mesh.loops)
+        loop_data = NumpyBuffer(layout, size=poly_size)
 
         # Fetch data for requested semantics
         for buffer_semantic in proxy_layout.semantics:
@@ -217,59 +269,55 @@ class BlenderDataExtractor:
             semantic_name: str = buffer_semantic.get_name()
             numpy_type = buffer_semantic.get_numpy_type()
             if semantic == Semantic.VertexId:
-                data = self.fetch_data(mesh.loops, "vertex_index", numpy_type, size)
+                data = self.fetch_data(mesh.loops, "vertex_index", numpy_type, poly_size)
             elif semantic == Semantic.Normal:
-                data = self.fetch_data(mesh.loops, "normal", numpy_type, size)
+                data = self.fetch_data(mesh.loops, "normal", numpy_type, poly_size)
             elif semantic == Semantic.Tangent:
-                data = self.fetch_data(mesh.loops, "tangent", numpy_type, size)
+                data = self.fetch_data(mesh.loops, "tangent", numpy_type, poly_size)
             elif semantic == Semantic.BitangentSign:
-                data = self.fetch_data(mesh.loops, "bitangent_sign", numpy_type, size)
+                data = self.fetch_data(mesh.loops, "bitangent_sign", numpy_type, poly_size)
             elif semantic == Semantic.Color:
                 data = self.fetch_data(
-                    mesh.vertex_colors[semantic_name].data, "color", numpy_type, size
+                    mesh.vertex_colors[semantic_name].data, "color", numpy_type, poly_size
                 )
             elif semantic == Semantic.TexCoord:
                 data = self.fetch_data(
-                    mesh.uv_layers[semantic_name].data, "uv", numpy_type, size
+                    mesh.uv_layers[semantic_name].data, "uv", numpy_type, poly_size
                 )
             else:
                 continue
             self.sanitize_blender_data(data)
             loop_data.set_field(semantic_name, data)
 
-        # Swap every first with every third vertex for every face aka polygon
-        if flip_winding:
-            # Create array from 0 to len, it's >10x faster than quering it from Blender via
-            # `indices = self.fetch_data(mesh.loops, 'index', (numpy.uint32, 3), int(size/3))`
-            # Creates [0, 1, 2, 3, 4, 5] for len=6
-            indices = numpy.arange(len(loop_data.data))
-            # Convert flat array to 2-dim array of index triads
-            # [0, 1, 2, 3, 4, 5] -> [[0, 1, 2], [3, 4, 5]]
-            indices = indices.reshape(-1, 3)
-            # Swap every first with every third element of index triads
-            # [[0, 1, 2], [3, 4, 5]] -> [[2, 1, 0], [5, 4, 3]]
-            indices[:, [0, 2]] = indices[:, [2, 0]]
-            # Destroy first dimension so we could use the array as index for loop data array
-            # [[2, 1, 0], [5, 4, 3]] -> [2, 1, 0, 5, 4, 3]
-            indices = indices.flatten()
-            # Swap every first with every third element of loop data array
-            loop_data.data = loop_data.data[indices]
+        # Reorder from polygon order to triangle order in one numpy fancy-index
+        # pass.  This replaces both the old flip_winding data-shuffle and the
+        # dependency on the mesh already being triangulated by BMesh.
+        loop_data.data = loop_data.data[tri_loop_indices]
 
-        # Build IB
+        # Build IB and remove duplicate vertices in one vectorized pass
         index_data = None
         index_semantic = proxy_layout.get_element(AbstractSemantic(Semantic.Index))
-        if index_semantic is not None:
-            indexed_vertices = collections.OrderedDict()
-            # Note: foreach_get provides loop data in the same order as iteration over polygons
-            index_data = [
-                indexed_vertices.setdefault(data.tobytes(), len(indexed_vertices))
-                for data in loop_data.data
-            ]
-            index_data = numpy.array(index_data, dtype=index_semantic.get_numpy_type())
-
-        # Remove vertices with the exactly same attributes
-        if dedupe:
-            loop_data.remove_duplicates()
+        if index_semantic is not None or dedupe:
+            # View each structured row as an opaque byte blob so numpy.unique can
+            # compare whole rows without a Python-level loop.
+            item_size = loop_data.data.itemsize
+            void_view = loop_data.data.view(
+                numpy.dtype((numpy.void, item_size))
+            ).reshape(-1)
+            # unique_idx  : position of each unique element's FIRST occurrence in void_view
+            # inverse_idx : for every loop, which unique element it maps to (0-based into sorted uniques)
+            _, unique_idx, inverse_idx = numpy.unique(
+                void_view, return_index=True, return_inverse=True
+            )
+            # numpy.unique returns sorted uniques; restore first-occurrence order so
+            # the output matches the original OrderedDict behaviour.
+            first_order = numpy.argsort(unique_idx)          # sorted-unique -> first-occ order
+            remap = numpy.empty(len(first_order), dtype=numpy.intp)
+            remap[first_order] = numpy.arange(len(first_order))  # inverse mapping
+            if index_semantic is not None:
+                index_data = remap[inverse_idx].astype(index_semantic.get_numpy_type())
+            if dedupe:
+                loop_data.data = loop_data.data[unique_idx[first_order]]
 
         print(
             f"Loop data fetch time: {time.time() - start_time:.3f}s ({len(loop_data.get_data())} vertices, {len(index_data)} indices)"
@@ -293,17 +341,50 @@ class BlenderDataExtractor:
         # Initialize vertex data storage
         size = len(mesh.vertices)
         vertex_data = NumpyBuffer(layout, size=size)
-        vertex_groups = []
-        for buffer_semantic in proxy_layout.semantics:
-            if buffer_semantic.abstract.enum in [
-                Semantic.Blendindices,
-                Semantic.Blendweight,
-            ]:
-                vertex_groups = [
-                    sorted(vertex.groups, key=attrgetter("weight"), reverse=True)
-                    for vertex in mesh.vertices
-                ]
-                break
+
+        # Determine whether blend data is needed for this layout
+        needs_blend = any(
+            s.abstract.enum in (Semantic.Blendindices, Semantic.Blendweight)
+            for s in proxy_layout.semantics
+        )
+
+        # Flat COO-format vertex group arrays, built in a single Python pass.
+        # Replaces N calls to sorted(vertex.groups, ...) with one traversal +
+        # one numpy lexsort, then vectorized filling with num_vgs numpy passes.
+        _blend_vi: numpy.ndarray = numpy.empty(0, dtype=numpy.int32)
+        _blend_gi: numpy.ndarray = numpy.empty(0, dtype=numpy.int32)
+        _blend_wt: numpy.ndarray = numpy.empty(0, dtype=numpy.float32)
+        if needs_blend:
+            vi_list: list = []
+            gi_list: list = []
+            wt_list: list = []
+            for vi, vertex in enumerate(mesh.vertices):
+                for vg in vertex.groups:
+                    vi_list.append(vi)
+                    gi_list.append(vg.group)
+                    wt_list.append(vg.weight)
+            if vi_list:
+                _blend_vi = numpy.asarray(vi_list, dtype=numpy.int32)
+                _blend_gi = numpy.asarray(gi_list, dtype=numpy.int32)
+                _blend_wt = numpy.asarray(wt_list, dtype=numpy.float32)
+                # Sort by vertex id (asc) then by weight (desc) with one C-level sort
+                order = numpy.lexsort((-_blend_wt, _blend_vi))
+                _blend_vi = _blend_vi[order]
+                _blend_gi = _blend_gi[order]
+                _blend_wt = _blend_wt[order]
+
+        def _fill_blend(num_vgs: int, dtype: DTypeLike, src: numpy.ndarray) -> numpy.ndarray:
+            """Vectorized fill: num_vgs numpy passes instead of size*num_vgs Python iterations."""
+            out = numpy.zeros((size, num_vgs), dtype=dtype)
+            if len(_blend_vi) == 0:
+                return out
+            starts = numpy.searchsorted(_blend_vi, numpy.arange(size), side="left")
+            ends   = numpy.searchsorted(_blend_vi, numpy.arange(size), side="right")
+            counts = numpy.minimum(ends - starts, num_vgs)
+            for k in range(num_vgs):
+                mask = counts > k
+                out[mask, k] = src[starts[mask] + k]
+            return out
 
         # Fetch data for requested semantics
         for buffer_semantic in proxy_layout.semantics:
@@ -317,27 +398,13 @@ class BlenderDataExtractor:
                     numpy_type[0] if isinstance(numpy_type, tuple) else numpy_type
                 )
                 num_vgs: int = buffer_semantic.get_num_values()
-                data = numpy.array(
-                    [
-                        [vg.group for vg in groups[:num_vgs]]
-                        + [0] * (num_vgs - len(groups))
-                        for groups in vertex_groups
-                    ],
-                    dtype=dtype,
-                )
+                data = _fill_blend(num_vgs, dtype, _blend_gi)
             elif semantic == Semantic.Blendweight:
                 dtype: DTypeLike = (
                     numpy_type[0] if isinstance(numpy_type, tuple) else numpy_type
                 )
                 num_vgs: int = buffer_semantic.get_num_values()
-                data = numpy.array(
-                    [
-                        [vg.weight for vg in groups[:num_vgs]]
-                        + [0] * (num_vgs - len(groups))
-                        for groups in vertex_groups
-                    ],
-                    dtype=dtype,
-                )
+                data = _fill_blend(num_vgs, dtype, _blend_wt)
             else:
                 continue
             self.sanitize_blender_data(data)
