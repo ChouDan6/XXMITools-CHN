@@ -22,7 +22,6 @@ from .data.byte_buffer import (
 from .data.data_model import DataModelXXMI
 from .data.ini_format import INI_file
 from .datastructures import GameEnum
-from .export_ops import mesh_triangulate
 from .operators import Fatal
 
 
@@ -284,16 +283,16 @@ class ModExporter:
             # other available options: matrix_local, matrix_basis, matrix_parent_inverse
             final_mesh.transform(obj.matrix_world)
             final_mesh.transform(main_obj.matrix_world.inverted())
-        mesh_triangulate(final_mesh)
-        masked_vgs = [
+        # Triangulation is now handled inside get_loop_data via mesh.calc_loop_triangles(),
+        # which avoids the expensive BMesh round-trip (bm.from_mesh + triangulate + bm.to_mesh).
+        masked_vgs = {
             vg.index for vg in obj.vertex_groups if vg.name.startswith("MASK")
-        ]
-        _ = [
-            vg.__setattr__("weight", 0.0)
-            for vert in final_mesh.vertices
-            for vg in vert.groups
-            if vg.group in masked_vgs
-        ]
+        }
+        if masked_vgs:
+            for vert in final_mesh.vertices:
+                for vg in vert.groups:
+                    if vg.group in masked_vgs:
+                        vg.weight = 0.0
         self.__objs_to_cleanup.append(obj)
         return final_mesh
 
@@ -440,8 +439,20 @@ class ModExporter:
                         ),
                     )
                 max_groups: int = sem.format.get_num_values()
+                # Build a group-count-per-vertex array without a Python loop.
+                # foreach_get("vertex_index") on mesh.loops gives the vertex id for
+                # every loop; for vertex groups we iterate once to collect all ids.
+                vg_vertex_ids: list = []
                 for vertex in mesh.vertices:
-                    if len(vertex.groups) > max_groups:
+                    for _ in vertex.groups:
+                        vg_vertex_ids.append(vertex.index)
+                if vg_vertex_ids:
+                    import numpy as _np
+                    counts_per_vert = _np.bincount(
+                        _np.asarray(vg_vertex_ids, dtype=_np.int32),
+                        minlength=len(mesh.vertices),
+                    )
+                    if _np.any(counts_per_vert > max_groups):
                         self.operator.report(
                             {"WARNING"},
                             (
@@ -450,7 +461,6 @@ class ModExporter:
                                 "Alternatively you can enable normalize weights to format(Ignore this warning if you already have it enabled)"
                             ),
                         )
-                        break
         # At the moment these errors made the UV layers and vertex colors mandatory to export
         # in the future we might want to make them optional or auto generate them
         if len(missing_uvs) > 0:
