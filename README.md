@@ -1,7 +1,7 @@
 # XXMI Tools CHN
 
-基于 [XXMI Tools](https://github.com/leotorrez/XXMITools) v1.6.7 的中文修改版，添加多项实用功能，方便 Mod 导出与调试。
-
+基于 [XXMI Tools](https://github.com/leotorrez/XXMITools) v1.6.7 的中文修改版，添加多项实用功能，方便 Mod 导出与调试。  
+如果更新XXMI Tools,将migoto中的python文件和templatea文件迁移即可。  
 > 测试环境：Blender 4.4 / 5.0
 
 ---
