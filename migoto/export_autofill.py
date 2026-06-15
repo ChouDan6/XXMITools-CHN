@@ -152,11 +152,15 @@ class XXMI_OT_ExportWithAutoFill(bpy.types.Operator):
                 except Exception as e:
                     self.report({'WARNING'}, f"添加 DISABLED 前缀失败: {str(e)}")
 
-            # --- 5.6 自动执行 INI 预览 ---
-            try:
-                bpy.ops.xxmi.preview_ini()
-            except Exception as e:
-                print(f"[XXMI] INI 预览跳过: {str(e)}")
+            # --- 5.6 自动执行 INI 预览（根据用户设置决定是否打开窗口）---
+            show_preview = True
+            if hasattr(scene, "xxmi_autofill_props"):
+                show_preview = scene.xxmi_autofill_props.show_ini_preview
+            if show_preview:
+                try:
+                    bpy.ops.xxmi.preview_ini()
+                except Exception as e:
+                    print(f"[XXMI] INI 预览跳过: {str(e)}")
 
             self.report({'INFO'}, "导出流程完成！")
             
@@ -282,31 +286,44 @@ class XXMI_OT_PreviewINI(bpy.types.Operator):
                 self.report({'ERROR'}, "未能生成 INI 内容。")
                 return {'CANCELLED'}
 
-            # 写入 Blender 文本块
+            # 写入 Blender 文本块（保持光标位置）
             text_name = f"{mod_exporter.mod_name}_preview.ini"
-            if text_name in bpy.data.texts:
+            is_update = text_name in bpy.data.texts
+            if is_update:
                 text_block = bpy.data.texts[text_name]
+                # 记录当前光标位置，刷新后恢复
+                saved_line = text_block.current_line_index
+                saved_char = text_block.current_character
                 text_block.clear()
             else:
                 text_block = bpy.data.texts.new(text_name)
+                saved_line = 0
+                saved_char = 0
             text_block.write(ini_content)
 
-            # 打开新的文本编辑器区域显示预览
-            for area in context.screen.areas:
-                if area.type == 'TEXT_EDITOR':
-                    area.spaces[0].text = text_block
-                    self.report({'INFO'}, f"已更新 INI 预览: {text_name}")
-                    return {'FINISHED'}
+            # 恢复光标位置
+            total_lines = len(text_block.lines)
+            target_line = min(saved_line, total_lines - 1)
+            text_block.cursor_set(target_line, character=saved_char)
 
-            # 没有现有文本编辑器，拆分当前 3D 视口
-            for area in context.screen.areas:
-                if area.type == 'VIEW_3D':
-                    with context.temp_override(area=area):
-                        bpy.ops.screen.area_split(direction='VERTICAL', factor=0.5)
-                    # 新区域是列表中最后一个
-                    new_area = context.screen.areas[-1]
-                    new_area.type = 'TEXT_EDITOR'
-                    new_area.spaces[0].text = text_block
+            # 查找已打开此文本的窗口，若存在则复用（不新建）
+            found_existing = False
+            for window in context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type == 'TEXT_EDITOR' and area.spaces[0].text == text_block:
+                        found_existing = True
+                        break
+                if found_existing:
+                    break
+
+            if not found_existing:
+                # 打开独立新窗口
+                bpy.ops.wm.window_new()
+                new_window = context.window_manager.windows[-1]
+                new_screen = new_window.screen
+                for area in new_screen.areas:
+                    area.type = 'TEXT_EDITOR'
+                    area.spaces[0].text = text_block
                     break
 
             self.report({'INFO'}, f"已生成 INI 预览: {text_name}")
@@ -327,6 +344,11 @@ class XXMI_AutoFillProperties(bpy.types.PropertyGroup):
         name="添加 DISABLED 前缀",
         description="导出的 INI 文件名添加 DISABLED 前缀，使 mod 默认不生效",
         default=False,
+    )
+    show_ini_preview: bpy.props.BoolProperty(
+        name="导出后打开 INI 预览窗口",
+        description="导出完成后自动打开新窗口显示生成的 INI 文件内容",
+        default=True,
     )
 
 
@@ -363,6 +385,7 @@ class XXMI_PT_AutoFillPanel(bpy.types.Panel):
 
         if hasattr(context.scene, "xxmi_autofill_props"):
             layout.prop(context.scene.xxmi_autofill_props, "disabled_prefix")
+            layout.prop(context.scene.xxmi_autofill_props, "show_ini_preview")
 
         layout.label(text="* 自动补全 0-Max 顶点组并导出", icon="INFO")
 
