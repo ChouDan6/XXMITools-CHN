@@ -14,9 +14,22 @@ class XXMI_MergeUVProperties(PropertyGroup):
         items=[('AUTO', "全自动", ""), ('VISUAL', "交互式", "")],
         default='AUTO'
     )
-    size_mode: EnumProperty(
-        name="尺寸规则",
-        items=[('POT', "2的幂次方", ""), ('EVEN', "2的倍数", "")],
+    size_mode_w: EnumProperty(
+        name="宽度规则",
+        items=[
+            ('POT', "2的幂次方", "128, 256, 512, 1024, 2048, 4096…"),
+            ('MULTI_OF_4', "4的倍数", "兼容 BC/DXT/ETC/ASTC 压缩格式"),
+            ('EVEN', "2的倍数", "任意偶数，最灵活"),
+        ],
+        default='POT'
+    )
+    size_mode_h: EnumProperty(
+        name="高度规则",
+        items=[
+            ('POT', "2的幂次方", ""),
+            ('MULTI_OF_4', "4的倍数", ""),
+            ('EVEN', "2的倍数", ""),
+        ],
         default='POT'
     )
     target_width: IntProperty(name="宽 (W)", default=2048, min=2)
@@ -28,9 +41,24 @@ class XXMI_MergeUVProperties(PropertyGroup):
 def get_pot(x):
     return 2 ** math.ceil(math.log2(max(1, x)))
 
+def get_multi_of_4(x):
+    """向上取整到最近的 4 的倍数（兼容 BC/DXT/ETC/ASTC 压缩格式）。"""
+    x = int(math.ceil(x))
+    rem = x % 4
+    return x if rem == 0 else x + (4 - rem)
+
 def get_even(x):
     x = int(math.ceil(x))
     return x if x % 2 == 0 else x + 1
+
+def apply_size_rule(x, mode):
+    """根据规则模式对尺寸进行强制对齐。"""
+    if mode == 'POT':
+        return get_pot(x)
+    elif mode == 'MULTI_OF_4':
+        return get_multi_of_4(x)
+    else:
+        return get_even(x)
 
 def get_image_hash(img):
     if not img or not img.pixels: return None
@@ -92,12 +120,10 @@ def get_tex_uv_layer_name(tex_node):
             return from_node.uv_map
     return None
 
-def calculate_packing(images_info, target_w, mode):
+def calculate_packing(images_info, target_w, mode_w, mode_h):
     sorted_images = sorted(images_info, key=lambda x: x[2], reverse=True)
     max_img_w = max((img[1] for img in sorted_images), default=0)
-    actual_w = max(target_w, max_img_w)
-    if mode == 'POT': actual_w = get_pot(actual_w)
-    else: actual_w = get_even(actual_w)
+    actual_w = apply_size_rule(max(target_w, max_img_w), mode_w)
 
     placements = {}
     current_x, current_y = 0, 0
@@ -113,10 +139,44 @@ def calculate_packing(images_info, target_w, mode):
         row_height = max(row_height, h)
         max_y = max(max_y, current_y + h)
 
-    final_h = max_y
-    if mode == 'POT': final_h = get_pot(final_h)
-    else: final_h = get_even(final_h)
+    final_h = apply_size_rule(max_y, mode_h)
     return actual_w, final_h, placements
+
+def find_best_packing(images_info, mode_w, mode_h):
+    """多候选宽度试探，返回利用率（已用像素/总像素）最高的打包方案。
+    候选宽度来源：
+      1. sqrt(总面积) × 常见长宽比 (0.5~2.0)
+      2. 游戏引擎常用尺寸 (512, 1024, 2048, 4096)
+      3. 最大贴图宽度落在规则边界上的对齐值
+    返回: (best_w, best_h, best_placements, best_efficiency)
+    """
+    total_area = sum(w * h for _, w, h in images_info)
+    max_img_w = max((img[1] for img in images_info), default=0)
+    base_area = max(total_area, 1)
+
+    candidates = set()
+    # 1) 基于总面积的不同长宽比
+    for ratio in (0.5, 0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.5, 1.75, 2.0):
+        candidate = max(max_img_w, int(math.sqrt(base_area * ratio)))
+        candidates.add(candidate)
+    # 2) 游戏引擎常用尺寸
+    for size in (512, 1024, 2048, 4096, 8192):
+        if size >= max_img_w:
+            candidates.add(size)
+    # 3) 最大贴图宽度 + 各种对齐边界
+    for extra in (1, 4, 8, 16, 32, 64, 128, 256):
+        candidates.add(max_img_w + extra)
+
+    best = None
+    for w in sorted(candidates):
+        w_aligned = apply_size_rule(w, mode_w)
+        _, h, placements = calculate_packing(images_info, w_aligned, mode_w, mode_h)
+        atlas_px = w_aligned * h
+        efficiency = total_area / atlas_px if atlas_px > 0 else 0.0
+        if best is None or efficiency > best[3]:
+            best = (w_aligned, h, placements, efficiency)
+
+    return best
 
 def get_assets_from_objects(objs):
     """返回:
@@ -256,11 +316,57 @@ class XXMI_OT_MUV_CalculateSize(Operator):
         if not unique_imgs: return {'CANCELLED'}
         images_info = [(h_id, img.size[0], img.size[1]) for h_id, img in unique_imgs.items()]
         total_area = sum(w * h for _, w, h in images_info)
-        mode = props.size_mode
-        guess_w = get_pot(math.ceil(math.sqrt(total_area))) if mode == 'POT' else get_even(math.ceil(math.sqrt(total_area)))
-        calc_w, calc_h, _ = calculate_packing(images_info, guess_w, mode)
+        mode_w, mode_h = props.size_mode_w, props.size_mode_h
+        calc_w, calc_h, _, efficiency = find_best_packing(images_info, mode_w, mode_h)
         props.target_width = calc_w
         props.target_height = calc_h
+        waste_pct = round((1.0 - efficiency) * 100, 1)
+        self.report({'INFO'},
+            f"最佳尺寸: {calc_w}×{calc_h}  |  "
+            f"利用率: {round(efficiency * 100, 1)}%  |  "
+            f"浪费: {waste_pct}%"
+        )
+        return {'FINISHED'}
+
+class XXMI_OT_MUV_RecommendRules(Operator):
+    bl_idname = "xxmi.muv_recommend_rules"
+    bl_label = "推荐最优规则"
+    bl_description = "遍历 9 种规则组合，自动选中利用率最高的方案"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    RULES = ('POT', 'MULTI_OF_4', 'EVEN')
+    RULE_LABELS = {'POT': "2的幂", 'MULTI_OF_4': "4的倍数", 'EVEN': "2的倍数"}
+
+    def execute(self, context):
+        props = context.scene.xxmi_merge_uv_props
+        _, unique_imgs, _ = get_unique_assets(context)
+        if not unique_imgs:
+            self.report({'WARNING'}, "未发现贴图")
+            return {'CANCELLED'}
+        images_info = [(h_id, img.size[0], img.size[1]) for h_id, img in unique_imgs.items()]
+
+        best = None  # (mode_w, mode_h, w, h, efficiency)
+        for mw in self.RULES:
+            for mh in self.RULES:
+                bw, bh, _, eff = find_best_packing(images_info, mw, mh)
+                if best is None or eff > best[4]:
+                    best = (mw, mh, bw, bh, eff)
+
+        mw_best, mh_best, calc_w, calc_h, efficiency = best
+        props.size_mode_w = mw_best
+        props.size_mode_h = mh_best
+        props.target_width = calc_w
+        props.target_height = calc_h
+
+        waste_pct = round((1.0 - efficiency) * 100, 1)
+        self.report(
+            {'INFO'},
+            f"推荐: 宽={self.RULE_LABELS[mw_best]}，"
+            f"高={self.RULE_LABELS[mh_best]}  |  "
+            f"{calc_w}×{calc_h}  |  "
+            f"利用率: {round(efficiency * 100, 1)}%  |  "
+            f"浪费: {waste_pct}%"
+        )
         return {'FINISHED'}
 
 class XXMI_OT_MUV_ExecuteAutoMerge(Operator):
@@ -272,10 +378,10 @@ class XXMI_OT_MUV_ExecuteAutoMerge(Operator):
         props = context.scene.xxmi_merge_uv_props
         objs, unique_imgs, mat_info = get_unique_assets(context)
         if not unique_imgs: return {'CANCELLED'}
-        mode = props.size_mode
+        mode_w, mode_h = props.size_mode_w, props.size_mode_h
         final_w = props.target_width
         images_info = [(h_id, img.size[0], img.size[1]) for h_id, img in unique_imgs.items()]
-        fw, fh, placements = calculate_packing(images_info, final_w, mode)
+        fw, fh, placements = calculate_packing(images_info, final_w, mode_w, mode_h)
 
         atlas = np.zeros((fh, fw, 4), dtype=np.float32)
         for h, (px, py) in placements.items():
@@ -372,9 +478,9 @@ class XXMI_OT_MUV_ConfirmLayout(Operator):
         total_w_px = int(round((max_x - min_x) * 1000))
         total_h_px = int(round((max_y - min_y) * 1000))
 
-        mode = props.size_mode
-        final_w = get_pot(total_w_px) if mode == 'POT' else get_even(total_w_px)
-        final_h = get_pot(total_h_px) if mode == 'POT' else get_even(total_h_px)
+        mode_w, mode_h = props.size_mode_w, props.size_mode_h
+        final_w = apply_size_rule(total_w_px, mode_w)
+        final_h = apply_size_rule(total_h_px, mode_h)
 
         atlas = np.zeros((final_h, final_w, 4), dtype=np.float32)
         placements = {}
@@ -423,7 +529,11 @@ class XXMI_PT_MergeUVPanel(Panel):
             layout.label(text="需重启插件或重载脚本", icon="ERROR")
             return
         props = context.scene.xxmi_merge_uv_props
-        layout.prop(props, "size_mode")
+        # 尺寸规则 + 一键推荐
+        rule_row = layout.row(align=True)
+        rule_row.prop(props, "size_mode_w", text="宽")
+        rule_row.prop(props, "size_mode_h", text="高")
+        rule_row.operator("xxmi.muv_recommend_rules", text="", icon='LIGHT')
         layout.separator()
         layout.prop(props, "workflow_tab", expand=True)
         if props.workflow_tab == 'AUTO':
@@ -448,6 +558,7 @@ class XXMI_PT_MergeUVPanel(Panel):
 classes = (
     XXMI_MergeUVProperties,
     XXMI_OT_MUV_CalculateSize,
+    XXMI_OT_MUV_RecommendRules,
     XXMI_OT_MUV_ExecuteAutoMerge,
     XXMI_OT_MUV_StartLayout,
     XXMI_OT_MUV_ConfirmLayout,
